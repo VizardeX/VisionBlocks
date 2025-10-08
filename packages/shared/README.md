@@ -1,0 +1,1 @@
+Shared types/schemas for VisionBlocks.

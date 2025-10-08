@@ -1,0 +1,8 @@
+{
+    "name": "visionblocks",
+    "private": true,
+    "workspaces": [
+        "apps/web",
+        "packages/shared"
+    ]
+}
