@@ -1,0 +1,15 @@
+{
+  "key": "recyclables-mini",
+  "name": "Recyclables (Mini)",
+  "description": "Small starter dataset with paper, plastic, and metal items.",
+  "image_shape": [null, null, 3],
+  "num_classes": 3,
+  "classes": ["paper", "plastic", "metal"],
+  "approx_count": {
+    "paper": 58,
+    "plastic": 60,
+    "metal": 60
+  },
+  "license": "Educational use only (web-sourced).",
+  "version": "1.0.0"
+}
