@@ -170,3 +170,38 @@ def sample_from_dataset(key: str, mode: str = "random", index: Optional[int] = N
 
 def image_data_url(im: Image.Image) -> str:
     return _encode_preview_png(im, settings.PREVIEW_MAX_SIDE)
+
+def load_image_by_relpath(key: str, relpath: str) -> Image.Image:
+    idx = get_datasets_index()
+    if key not in idx:
+        raise KeyError(f"Unknown dataset: {key}")
+    ds = idx[key]
+    img_path = ds.root / relpath
+    if not img_path.exists():
+        raise FileNotFoundError(f"Image path not found: {relpath}")
+    with Image.open(img_path) as im:
+        if im.mode not in ("RGB", "RGBA", "L"):
+            im = im.convert("RGB")
+        return im.copy()
+
+def to_grayscale_preview_image(im: Image.Image) -> Image.Image:
+    if im.mode == "L":
+        return im.copy()
+    return im.convert("L")
+
+def split_channels_tinted(im: Image.Image) -> tuple[Image.Image, Image.Image, Image.Image]:
+    if im.mode not in ("RGB", "RGBA", "L"):
+        im = im.convert("RGB")
+    if im.mode == "L":
+        # replicate grayscale to RGB (all same)
+        g = im.convert("RGB")
+        return g.copy(), g.copy(), g.copy()
+
+    r, g, b = im.split()[:3]
+
+    # make tinted images (keep one channel, zero others)
+    zero = Image.new("L", im.size, 0)
+    r_img = Image.merge("RGB", (r, zero, zero))
+    g_img = Image.merge("RGB", (zero, g, zero))
+    b_img = Image.merge("RGB", (zero, zero, b))
+    return r_img, g_img, b_img

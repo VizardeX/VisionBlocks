@@ -26,3 +26,16 @@ class SampleResponse(BaseModel):
     image_data_url: str
     # optional original file path (relative inside dataset)
     path: Optional[str] = None
+
+class GrayResponse(BaseModel):
+  dataset_key: str
+  path: str
+  image_data_url: str
+
+class SplitChannelsResponse(BaseModel):
+  dataset_key: str
+  path: str
+  r_data_url: str
+  g_data_url: str
+  b_data_url: str
+

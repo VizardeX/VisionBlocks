@@ -2,6 +2,6 @@
   "items": [
     { "key": "mnist", "name": "MNIST" },
     { "key": "cifar10", "name": "CIFAR-10" },
-    { "key": "recyclables", "name": "Recyclables" }
+    { "key": "recyclables-mini", "name": "Recyclables" }
   ]
 }
