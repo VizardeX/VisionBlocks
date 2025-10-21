@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WorkspaceSvg, Block as BlocklyBlock } from "blockly";
-import { Blockly } from "@/lib/blockly";
+import { Blockly, setDatasetOptions } from "@/lib/blockly";
 import { toolboxJsonModule2 } from "@/components/toolboxModule2";
 import OutputPanel, { type LogItem } from "@/components/OutputPanel";
 import BaymaxPanel from "@/components/BaymaxPanel";
@@ -40,6 +40,33 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(text || `${res.status} ${res.statusText}`);
   }
   return res.json();
+}
+
+/** Pulls datasets from backend and updates the dataset.select dropdown options.
+ *  Optionally nudges any dataset.select blocks to re-validate their current value. */
+async function refreshDatasets(workspace?: WorkspaceSvg) {
+  const data = await fetchJSON<{ items: { key: string; name: string }[] }>(
+    `${API_BASE}/datasets`
+  );
+  // Update global options used by the field dropdown
+  setDatasetOptions(data.items.map((i) => ({ name: i.name, key: i.key })));
+
+  if (!workspace) return;
+
+  // Nudge existing dataset.select blocks so their menu reflects latest options
+  const blocks = workspace.getAllBlocks(false);
+  const validKeys = new Set(data.items.map((i) => i.key));
+  for (const b of blocks) {
+    if (b.type === "dataset.select") {
+      const field = b.getField("DATASET") as any;
+      const cur = field?.getValue?.();
+      if (cur && !validKeys.has(cur) && data.items.length > 0) {
+        field.setValue(data.items[0].key); // fallback to first dataset
+      } else {
+        field?.setValue(cur); // nudge to rebuild menu with new options
+      }
+    }
+  }
 }
 
 /** Convert a chain of Module 2 blocks into ops[] JSON for the API */
@@ -131,13 +158,13 @@ function blocksToOps(first: BlocklyBlock | null): any[] {
         ops.push({ type: "normalize", mode: b.getFieldValue("MODE") });
         break;
 
-      // Analysis blocks do not change ops; they affect UI only.
+      // Analysis-only blocks (UI effects)
       case "m2.show_working":
       case "m2.before_after":
       case "m2.shape":
         break;
 
-      // Loop/export handled outside here
+      // Loop/export handled separately
       case "m2.loop_dataset":
       case "m2.export_dataset":
         break;
@@ -154,20 +181,31 @@ function blocksToOps(first: BlocklyBlock | null): any[] {
 function summarizeOps(ops: any[]): string[] {
   return ops.map((op) => {
     switch (op.type) {
-      case "reset": return "Reset working image";
+      case "reset":
+        return "Reset working image";
       case "resize":
-        if (op.mode === "size") return `Resize to ${op.w}×${op.h} (keep=${op.keep})`;
+        if (op.mode === "size")
+          return `Resize to ${op.w}×${op.h} (keep=${op.keep})`;
         if (op.mode === "fit") return `Resize fit within ${op.maxside}`;
         return `Scale ${op.pct}%`;
-      case "crop_center": return `Center crop ${op.w}×${op.h}`;
+      case "crop_center":
+        return `Center crop ${op.w}×${op.h}`;
       case "pad":
-        return `Pad ${op.w}×${op.h} (${op.mode}${op.mode === "constant" ? ` rgb(${op.r},${op.g},${op.b})` : ""})`;
-      case "brightness_contrast": return `Brightness ${op.b}, Contrast ${op.c}`;
-      case "blur_sharpen": return `Blur r=${op.blur}, Sharpen=${op.sharp}`;
-      case "edges": return `Edges ${op.method} thr=${op.threshold} overlay=${op.overlay}`;
-      case "to_grayscale": return "To grayscale";
-      case "normalize": return `Normalize ${op.mode}`;
-      default: return `Unknown op: ${op.type}`;
+        return `Pad ${op.w}×${op.h} (${op.mode}${
+          op.mode === "constant" ? ` rgb(${op.r},${op.g},${op.b})` : ""
+        })`;
+      case "brightness_contrast":
+        return `Brightness ${op.b}, Contrast ${op.c}`;
+      case "blur_sharpen":
+        return `Blur r=${op.blur}, Sharpen=${op.sharp}`;
+      case "edges":
+        return `Edges ${op.method} thr=${op.threshold} overlay=${op.overlay}`;
+      case "to_grayscale":
+        return "To grayscale";
+      case "normalize":
+        return `Normalize ${op.mode}`;
+      default:
+        return `Unknown op: ${op.type}`;
     }
   });
 }
@@ -177,7 +215,9 @@ export default function Module2Page() {
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
 
   const [logs, setLogs] = useState<LogItem[]>([]);
-  const [baymaxLine, setBaymaxLine] = useState<string>("Preprocessing is like cleaning my glasses!");
+  const [baymaxLine, setBaymaxLine] = useState<string>(
+    "Preprocessing is like cleaning my glasses!"
+  );
   const [dark, setDark] = useState<boolean>(true);
   const [running, setRunning] = useState<boolean>(false);
 
@@ -201,7 +241,12 @@ export default function Module2Page() {
     workspaceRef.current = ws;
 
     ws.clear();
-    try { (ws as any).scrollCenter?.(); } catch {}
+    try {
+      (ws as any).scrollCenter?.();
+    } catch {}
+
+    // NEW: load datasets into the dropdown on mount
+    refreshDatasets(ws).catch(() => {});
 
     return () => ws.dispose();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,15 +282,21 @@ export default function Module2Page() {
 
           if (b.type === "dataset.sample_image") {
             if (!datasetKeyRef.current) {
-              newLogs.push({ kind: "warn", text: "Please add 'use dataset' before 'get sample image'." });
+              newLogs.push({
+                kind: "warn",
+                text: "Please add 'use dataset' before 'get sample image'.",
+              });
               break;
             }
             const mode = b.getFieldValue("MODE") as "random" | "index";
             const idxRaw = b.getFieldValue("INDEX");
-            const idx = typeof idxRaw === "number" ? idxRaw : parseInt(String(idxRaw || 0), 10) || 0;
-            const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current!)}/sample?mode=${mode}${
-              mode === "index" ? `&index=${idx}` : ""
-            }`;
+            const idx =
+              typeof idxRaw === "number"
+                ? idxRaw
+                : parseInt(String(idxRaw || 0), 10) || 0;
+            const url = `${API_BASE}/datasets/${encodeURIComponent(
+              datasetKeyRef.current!
+            )}/sample?mode=${mode}${mode === "index" ? `&index=${idx}` : ""}`;
             const sample = await fetchJSON<SampleResponse>(url);
             sampleRef.current = sample;
             newLogs.push({
@@ -258,7 +309,11 @@ export default function Module2Page() {
           }
 
           if (b.type === "image.show") {
-            if (!sampleRef.current) newLogs.push({ kind: "warn", text: "Get a sample image first, then 'show image'." });
+            if (!sampleRef.current)
+              newLogs.push({
+                kind: "warn",
+                text: "Get a sample image first, then 'show image'.",
+              });
             else {
               const title = (b.getFieldValue("TITLE") as string) || "Original";
               newLogs.push({
@@ -273,17 +328,23 @@ export default function Module2Page() {
         }
       }
 
-      // pass 2: find the first chain that contains any m2.* block, build ops and run /preprocess/apply
+      // pass 2: find the first chain with any m2.* block, build ops and run /preprocess/apply
       let ranApply = false;
       for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
         let chainHasM2 = false;
         for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-          if (b.type.startsWith("m2.")) { chainHasM2 = true; break; }
+          if (b.type.startsWith("m2.")) {
+            chainHasM2 = true;
+            break;
+          }
         }
         if (!chainHasM2) continue;
 
         if (!datasetKeyRef.current || !sampleRef.current) {
-          newLogs.push({ kind: "warn", text: "Add 'use dataset' and 'get sample image' before preprocessing." });
+          newLogs.push({
+            kind: "warn",
+            text: "Add 'use dataset' and 'get sample image' before preprocessing.",
+          });
           break;
         }
 
@@ -307,11 +368,14 @@ export default function Module2Page() {
           path: sampleRef.current.path,
           ops,
         };
-        const applyResp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(applyBody),
-        });
+        const applyResp = await fetchJSON<ApplyResp>(
+          `${API_BASE}/preprocess/apply`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(applyBody),
+          }
+        );
 
         if (wantsBeforeAfter) {
           newLogs.push({
@@ -349,7 +413,10 @@ export default function Module2Page() {
         while (b) {
           if (b.type === "m2.loop_dataset") {
             if (!datasetKeyRef.current) {
-              newLogs.push({ kind: "warn", text: "Add 'use dataset' before the loop block." });
+              newLogs.push({
+                kind: "warn",
+                text: "Add 'use dataset' before the loop block.",
+              });
               break;
             }
             // subset selection
@@ -367,7 +434,9 @@ export default function Module2Page() {
               kind: "card",
               title: "Loop",
               lines: [
-                `Subset: ${subsetMode}${subsetMode !== "all" ? ` (N=${N})` : ""}`,
+                `Subset: ${subsetMode}${
+                  subsetMode !== "all" ? ` (N=${N})` : ""
+                }`,
                 `Shuffle: ${shuffle}`,
                 `Progress every: ${K} images`,
                 "Pipeline:",
@@ -379,16 +448,24 @@ export default function Module2Page() {
             let cursor: BlocklyBlock | null = b.getNextBlock();
             let exportBlock: BlocklyBlock | null = null;
             while (cursor) {
-              if (cursor.type === "m2.export_dataset") { exportBlock = cursor; break; }
+              if (cursor.type === "m2.export_dataset") {
+                exportBlock = cursor;
+                break;
+              }
               cursor = cursor.getNextBlock();
             }
             if (!exportBlock) {
-              newLogs.push({ kind: "warn", text: "Add 'export processed dataset' after the loop to save results." });
+              newLogs.push({
+                kind: "warn",
+                text: "Add 'export processed dataset' after the loop to save results.",
+              });
               break;
             }
 
-            const newName = exportBlock.getFieldValue("NAME") || "processed";
-            const overwrite = exportBlock.getFieldValue("OVERWRITE") === "TRUE";
+            const newName =
+              exportBlock.getFieldValue("NAME") || "processed";
+            const overwrite =
+              exportBlock.getFieldValue("OVERWRITE") === "TRUE";
 
             // Call /preprocess/batch_export
             const body = {
@@ -403,11 +480,14 @@ export default function Module2Page() {
               overwrite,
             };
 
-            const resp = await fetchJSON<BatchExportResp>(`${API_BASE}/preprocess/batch_export`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-            });
+            const resp = await fetchJSON<BatchExportResp>(
+              `${API_BASE}/preprocess/batch_export`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+              }
+            );
 
             newLogs.push({
               kind: "card",
@@ -418,6 +498,9 @@ export default function Module2Page() {
                 `Classes: ${resp.classes.join(", ")}`,
               ],
             });
+
+            // repopulate the dataset dropdown so the new dataset shows up immediately
+            await refreshDatasets(workspaceRef.current);
           }
           b = b.getNextBlock();
         }
@@ -426,14 +509,18 @@ export default function Module2Page() {
       if (!ranApply && newLogs.length === 0) {
         newLogs.push({
           kind: "warn",
-          text: "Build a pipeline: use dataset → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
+          text:
+            "Build a pipeline: use dataset → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
         });
       }
 
       setLogs(newLogs);
       setBaymaxLine("Nice! I can really see the difference after preprocessing.");
     } catch (e: any) {
-      setLogs((prev) => [...prev, { kind: "error", text: `Run failed: ${e?.message || String(e)}` }]);
+      setLogs((prev) => [
+        ...prev,
+        { kind: "error", text: `Run failed: ${e?.message || String(e)}` },
+      ]);
       setBaymaxLine("Oops—my lenses fogged up. Can you check your blocks?");
     } finally {
       setRunning(false);
@@ -450,7 +537,7 @@ export default function Module2Page() {
       className={`h-screen w-screen ${appBg}`}
       style={{
         display: "grid",
-        gridTemplateColumns: `minmax(0, 1fr) 380px`,
+        gridTemplateColumns: `minmax(0, 1fr) ${sizes.rightWidth}px`,
         gridTemplateRows: "48px 1fr",
       }}
     >
@@ -458,6 +545,16 @@ export default function Module2Page() {
       <div className={`col-span-2 flex items-center justify-between px-3 border-b ${barBg}`}>
         <div className={`font-semibold ${barText}`}>VisionBlocks — Module 2: Image Preprocessing</div>
         <div className="flex gap-2 items-center">
+          <button
+            onClick={() => refreshDatasets(workspaceRef.current)}
+            className={`px-3 py-1.5 rounded-md border ${
+              dark ? "border-neutral-700 text-neutral-200 hover:bg-neutral-800" : "border-gray-300 text-gray-800 hover:bg-gray-50"
+            }`}
+            title="Reload dataset list"
+          >
+            Refresh datasets
+          </button>
+
           <button
             onClick={() => setDark(!dark)}
             className={`px-3 py-1.5 rounded-md border ${
