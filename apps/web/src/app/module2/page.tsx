@@ -18,6 +18,17 @@ type SampleResponse = {
   path: string;
 };
 
+type DatasetInfoResp = {
+  key: string;
+  name: string;
+  description?: string | null;
+  image_shape?: [number | null, number | null, number | null] | null;
+  num_classes: number;
+  classes: string[];
+  approx_count: Record<string, number>;
+  version?: string;
+};
+
 type ApplyResp = {
   dataset_key: string;
   path: string;
@@ -245,7 +256,7 @@ export default function Module2Page() {
       (ws as any).scrollCenter?.();
     } catch {}
 
-    // NEW: load datasets into the dropdown on mount
+    // Load datasets into the dropdown on mount
     refreshDatasets(ws).catch(() => {});
 
     return () => ws.dispose();
@@ -265,7 +276,7 @@ export default function Module2Page() {
     const newLogs: LogItem[] = [];
 
     try {
-      // pass 1: walk blocks to set dataset and maybe sample
+      // pass 1: walk blocks to handle dataset.* and sampling & image.show
       const tops = ws.getTopBlocks(true) as BlocklyBlock[];
 
       datasetKeyRef.current = null;
@@ -278,6 +289,49 @@ export default function Module2Page() {
             const key = b.getFieldValue("DATASET");
             datasetKeyRef.current = key;
             newLogs.push({ kind: "info", text: `[info] Using dataset: ${key}` });
+          }
+
+          if (b.type === "dataset.info") {
+            if (!datasetKeyRef.current) {
+              newLogs.push({ kind: "warn", text: "Add 'use dataset' before 'dataset info'." });
+            } else {
+              const info = await fetchJSON<DatasetInfoResp>(`${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`);
+              const lines: string[] = [
+                `Name: ${info.name}`,
+                `Classes: ${info.classes.join(", ") || "(none)"}`,
+              ];
+              newLogs.push({ kind: "card", title: "Dataset Info", lines });
+            }
+          }
+
+          if (b.type === "dataset.class_counts") {
+            if (!datasetKeyRef.current) {
+              newLogs.push({ kind: "warn", text: "Add 'use dataset' before 'class counts'." });
+            } else {
+              const info = await fetchJSON<DatasetInfoResp>(`${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`);
+              const lines = Object.entries(info.approx_count || {}).map(
+                ([cls, n]) => `${cls}: ${n}`
+              );
+              newLogs.push({ kind: "card", title: "Class Counts", lines: lines.length ? lines : ["(no images)"] });
+            }
+          }
+
+          if (b.type === "dataset.class_distribution_preview") {
+            if (!datasetKeyRef.current) {
+              newLogs.push({ kind: "warn", text: "Add 'use dataset' before 'class distribution preview'." });
+            } else {
+              const info = await fetchJSON<DatasetInfoResp>(`${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current)}/info`);
+              const total = Object.values(info.approx_count || {}).reduce((a, b) => a + b, 0);
+              const lines =
+                total > 0
+                  ? info.classes.map((cls) => {
+                      const n = info.approx_count?.[cls] ?? 0;
+                      const pct = ((n / total) * 100).toFixed(1);
+                      return `${cls}: ${pct}%`;
+                    })
+                  : ["(no images)"];
+              newLogs.push({ kind: "card", title: "Class Distribution (%)", lines });
+            }
           }
 
           if (b.type === "dataset.sample_image") {
@@ -510,7 +564,7 @@ export default function Module2Page() {
         newLogs.push({
           kind: "warn",
           text:
-            "Build a pipeline: use dataset → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
+            "Build a pipeline: use dataset → dataset info/class counts (optional) → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
         });
       }
 

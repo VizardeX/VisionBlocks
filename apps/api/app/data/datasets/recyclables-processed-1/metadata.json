@@ -1,0 +1,33 @@
+{
+  "name": "recyclables-processed-1",
+  "base_dataset": "recyclables-mini",
+  "num_classes": 3,
+  "classes": [
+    "metal",
+    "paper",
+    "plastic"
+  ],
+  "image_count": 178,
+  "preprocessing": [
+    {
+      "type": "crop_center",
+      "w": 200,
+      "h": 200
+    },
+    {
+      "type": "to_grayscale"
+    },
+    {
+      "type": "normalize",
+      "mode": "zero_one"
+    },
+    {
+      "type": "edges",
+      "method": "laplacian",
+      "threshold": 100,
+      "overlay": false
+    }
+  ],
+  "format": "same_as_source",
+  "version": "1.0.0"
+}
