@@ -10,200 +10,166 @@ import { DarkTheme, LightTheme } from "@/lib/blockly/theme";
 
 const API_BASE = "http://localhost:8000";
 
-type DatasetInfo = {
-  key: string;
-  name: string;
-  classes: string[];
-  approx_count: Record<string, number>;
-};
-
 type SampleResponse = {
   dataset_key: string;
   index_used: number;
   label: string;
   image_data_url: string;
-  path?: string;
+  path: string;
 };
 
-async function fetchJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(await res.text());
+type ApplyResp = {
+  dataset_key: string;
+  path: string;
+  before_data_url: string;
+  after_data_url: string;
+  after_shape: [number, number, number] | number[];
+};
+
+type BatchExportResp = {
+  base_dataset: string;
+  new_dataset_key: string;
+  processed: number;
+  classes: string[];
+};
+
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `${res.status} ${res.statusText}`);
+  }
   return res.json();
 }
 
-function summarizePipeline(block: BlocklyBlock): string[] {
-  // Walk a chain and summarize Module 2 operations.
-  const steps: string[] = [];
-  let b: BlocklyBlock | null = block;
+/** Convert a chain of Module 2 blocks into ops[] JSON for the API */
+function blocksToOps(first: BlocklyBlock | null): any[] {
+  const ops: any[] = [];
+  let b: BlocklyBlock | null = first;
   while (b) {
     switch (b.type) {
       case "m2.reset_working":
-        steps.push("Reset working image");
+        ops.push({ type: "reset" });
         break;
+
       case "m2.resize": {
         const mode = b.getFieldValue("MODE");
         if (mode === "size") {
-          steps.push(`Resize to ${b.getFieldValue("W")}×${b.getFieldValue("H")} (keep=${b.getFieldValue("KEEP")})`);
+          ops.push({
+            type: "resize",
+            mode: "size",
+            w: Number(b.getFieldValue("W") || 256),
+            h: Number(b.getFieldValue("H") || 256),
+            keep: b.getFieldValue("KEEP"),
+          });
         } else if (mode === "fit") {
-          steps.push(`Resize fit within ${b.getFieldValue("MAXSIDE")}`);
+          ops.push({
+            type: "resize",
+            mode: "fit",
+            maxside: Number(b.getFieldValue("MAXSIDE") || 256),
+          });
         } else {
-          steps.push(`Scale ${b.getFieldValue("PCT")}%`);
+          ops.push({
+            type: "resize",
+            mode: "scale",
+            pct: Number(b.getFieldValue("PCT") || 100),
+          });
         }
         break;
       }
+
       case "m2.crop_center":
-        steps.push(`Center crop ${b.getFieldValue("W")}×${b.getFieldValue("H")}`);
+        ops.push({
+          type: "crop_center",
+          w: Number(b.getFieldValue("W") || 224),
+          h: Number(b.getFieldValue("H") || 224),
+        });
         break;
+
       case "m2.pad":
-        steps.push(
-          `Pad to ${b.getFieldValue("W")}×${b.getFieldValue("H")} (${b.getFieldValue("MODE")}${
-            b.getFieldValue("MODE") === "constant"
-              ? ` rgb(${b.getFieldValue("R")},${b.getFieldValue("G")},${b.getFieldValue("B")})`
-              : ""
-          })`
-        );
+        ops.push({
+          type: "pad",
+          w: Number(b.getFieldValue("W") || 256),
+          h: Number(b.getFieldValue("H") || 256),
+          mode: b.getFieldValue("MODE"),
+          r: Number(b.getFieldValue("R") || 0),
+          g: Number(b.getFieldValue("G") || 0),
+          b: Number(b.getFieldValue("B") || 0),
+        });
         break;
+
       case "m2.brightness_contrast":
-        steps.push(`Brightness ${b.getFieldValue("B")}, Contrast ${b.getFieldValue("C")}`);
+        ops.push({
+          type: "brightness_contrast",
+          b: Number(b.getFieldValue("B") || 0),
+          c: Number(b.getFieldValue("C") || 0),
+        });
         break;
+
       case "m2.blur_sharpen":
-        steps.push(`Blur r=${b.getFieldValue("BLUR")}, Sharpen=${b.getFieldValue("SHARP")}`);
+        ops.push({
+          type: "blur_sharpen",
+          blur: Number(b.getFieldValue("BLUR") || 0),
+          sharp: Number(b.getFieldValue("SHARP") || 0),
+        });
         break;
+
       case "m2.edges":
-        steps.push(
-          `Edges ${b.getFieldValue("METHOD")} thr=${b.getFieldValue("THRESH")} overlay=${b.getFieldValue("OVERLAY")}`
-        );
+        ops.push({
+          type: "edges",
+          method: b.getFieldValue("METHOD"),
+          threshold: Number(b.getFieldValue("THRESH") || 100),
+          overlay: b.getFieldValue("OVERLAY") === "TRUE",
+        });
         break;
+
       case "m2.to_grayscale":
-        steps.push("To grayscale");
+        ops.push({ type: "to_grayscale" });
         break;
+
       case "m2.normalize":
-        steps.push(`Normalize ${b.getFieldValue("MODE")}`);
+        ops.push({ type: "normalize", mode: b.getFieldValue("MODE") });
         break;
+
+      // Analysis blocks do not change ops; they affect UI only.
       case "m2.show_working":
-        steps.push(`Show working (“${b.getFieldValue("TITLE") || "Processed"}”)`);
-        break;
       case "m2.before_after":
-        steps.push("Show before/after");
-        break;
       case "m2.shape":
-        steps.push("Show working shape");
         break;
-      case "m2.loop_dataset": {
-        const subset = b.getFieldValue("SUBSET");
-        const nVal = b.getFieldValue("N");
-        const k = b.getFieldValue("K");
-        const shuffle = b.getFieldValue("SHUFFLE");
-        steps.push(
-          `For each image (subset=${subset}${subset !== "all" ? `, N=${nVal}` : ""}, shuffle=${shuffle}, every ${k}) { … }`
-        );
-        // summarize inner
-        const inner = b.getInputTargetBlock("DO");
-        if (inner) {
-          const innerSteps = summarizePipeline(inner).map((s) => `  - ${s}`);
-          steps.push(...innerSteps);
-        }
-        break;
-      }
+
+      // Loop/export handled outside here
+      case "m2.loop_dataset":
       case "m2.export_dataset":
-        steps.push(
-          `Export name="${b.getFieldValue("NAME")}", format=${b.getFieldValue("FORMAT")}${
-            b.getFieldValue("FORMAT") === "jpeg" ? `, q=${b.getFieldValue("QUALITY")}` : ""
-          }, overwrite=${b.getFieldValue("OVERWRITE")}`
-        );
         break;
+
       default:
-        // ignore other categories from module 1
+        // ignore Module 1 blocks here
         break;
     }
     b = b.getNextBlock();
   }
-  return steps;
+  return ops;
 }
 
-async function runWorkspaceM2(workspace: WorkspaceSvg): Promise<{ logs: LogItem[]; baymax: string }> {
-  const logs: LogItem[] = [];
-  let baymax = "Okay! I’m ready to clean images. What should we do first?";
-
-  let datasetKey: string | null = null;
-  let lastSample: SampleResponse | null = null;
-
-  const tops = workspace.getTopBlocks(true) as BlocklyBlock[];
-
-  for (const top of tops) {
-    let b: BlocklyBlock | null = top;
-
-    // Handle Dataset + sampling exactly like Module 1 so we can at least show an image
-    while (b) {
-      if (b.type === "dataset.select") {
-        datasetKey = (b.getFieldValue("DATASET") as string) ?? null;
-        logs.push({ kind: "info", text: `[info] Using dataset: ${datasetKey}` });
-      }
-
-      if (b.type === "dataset.sample_image") {
-        if (!datasetKey) {
-          logs.push({ kind: "warn", text: "Please add 'use dataset' before 'get sample image'." });
-        } else {
-          const mode = (b.getFieldValue("MODE") as string) as "random" | "index";
-          const idxRaw = b.getFieldValue("INDEX");
-          const idx = typeof idxRaw === "number" ? idxRaw : parseInt(String(idxRaw || 0), 10) || 0;
-          const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKey)}/sample?mode=${mode}${
-            mode === "index" ? `&index=${idx}` : ""
-          }`;
-          lastSample = await fetchJSON<SampleResponse>(url);
-          logs.push({
-            kind: "preview",
-            text:
-              mode === "index"
-                ? `[preview] sample image loaded (index ${lastSample.index_used})`
-                : `[preview] sample image loaded (random index ${lastSample.index_used})`,
-          });
-        }
-      }
-
-      if (b.type === "image.show") {
-        if (!lastSample) {
-          logs.push({ kind: "warn", text: "Get a sample image first, then 'show image'." });
-        } else {
-          const title = (b.getFieldValue("TITLE") as string) || "Original";
-          logs.push({ kind: "image", src: lastSample.image_data_url, caption: `${title} — label: ${lastSample.label}` });
-        }
-      }
-
-      // Module 2 pipeline blocks: for now, we summarize steps & show placeholders
-      if (b.type.startsWith("m2.")) {
-        const steps = summarizePipeline(b);
-        logs.push({ kind: "card", title: "Planned Pipeline", lines: steps });
-
-        // Placeholder before/after:
-        if (lastSample) {
-          logs.push({
-            kind: "images",
-            items: [
-              { src: lastSample.image_data_url, caption: "Before (original)" },
-              { src: lastSample.image_data_url, caption: "After (preview coming)" },
-            ],
-          });
-        } else {
-          logs.push({ kind: "warn", text: "No sample image yet — add 'get sample image' to see previews." });
-        }
-
-        // Skip ahead: we don't re-run the rest of the chain after summarizing this top block
-        break;
-      }
-
-      b = b.getNextBlock();
+function summarizeOps(ops: any[]): string[] {
+  return ops.map((op) => {
+    switch (op.type) {
+      case "reset": return "Reset working image";
+      case "resize":
+        if (op.mode === "size") return `Resize to ${op.w}×${op.h} (keep=${op.keep})`;
+        if (op.mode === "fit") return `Resize fit within ${op.maxside}`;
+        return `Scale ${op.pct}%`;
+      case "crop_center": return `Center crop ${op.w}×${op.h}`;
+      case "pad":
+        return `Pad ${op.w}×${op.h} (${op.mode}${op.mode === "constant" ? ` rgb(${op.r},${op.g},${op.b})` : ""})`;
+      case "brightness_contrast": return `Brightness ${op.b}, Contrast ${op.c}`;
+      case "blur_sharpen": return `Blur r=${op.blur}, Sharpen=${op.sharp}`;
+      case "edges": return `Edges ${op.method} thr=${op.threshold} overlay=${op.overlay}`;
+      case "to_grayscale": return "To grayscale";
+      case "normalize": return `Normalize ${op.mode}`;
+      default: return `Unknown op: ${op.type}`;
     }
-  }
-
-  if (logs.length === 0) {
-    logs.push({
-      kind: "warn",
-      text: "Add blocks: use dataset → get sample image → reset working image → resize/pad/etc. → show before/after",
-    });
-  }
-
-  return { logs, baymax };
+  });
 }
 
 export default function Module2Page() {
@@ -214,6 +180,10 @@ export default function Module2Page() {
   const [baymaxLine, setBaymaxLine] = useState<string>("Preprocessing is like cleaning my glasses!");
   const [dark, setDark] = useState<boolean>(true);
   const [running, setRunning] = useState<boolean>(false);
+
+  // Session memory for dataset + sample image path
+  const datasetKeyRef = useRef<string | null>(null);
+  const sampleRef = useRef<SampleResponse | null>(null);
 
   const sizes = useMemo(() => ({ rightWidth: 380 }), []);
 
@@ -242,6 +212,234 @@ export default function Module2Page() {
     workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
   }, [dark]);
 
+  async function run(): Promise<void> {
+    const ws = workspaceRef.current;
+    if (!ws) return;
+
+    setRunning(true);
+    const newLogs: LogItem[] = [];
+
+    try {
+      // pass 1: walk blocks to set dataset and maybe sample
+      const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+
+      datasetKeyRef.current = null;
+      sampleRef.current = null;
+
+      for (const top of tops) {
+        let b: BlocklyBlock | null = top;
+        while (b) {
+          if (b.type === "dataset.select") {
+            const key = b.getFieldValue("DATASET");
+            datasetKeyRef.current = key;
+            newLogs.push({ kind: "info", text: `[info] Using dataset: ${key}` });
+          }
+
+          if (b.type === "dataset.sample_image") {
+            if (!datasetKeyRef.current) {
+              newLogs.push({ kind: "warn", text: "Please add 'use dataset' before 'get sample image'." });
+              break;
+            }
+            const mode = b.getFieldValue("MODE") as "random" | "index";
+            const idxRaw = b.getFieldValue("INDEX");
+            const idx = typeof idxRaw === "number" ? idxRaw : parseInt(String(idxRaw || 0), 10) || 0;
+            const url = `${API_BASE}/datasets/${encodeURIComponent(datasetKeyRef.current!)}/sample?mode=${mode}${
+              mode === "index" ? `&index=${idx}` : ""
+            }`;
+            const sample = await fetchJSON<SampleResponse>(url);
+            sampleRef.current = sample;
+            newLogs.push({
+              kind: "preview",
+              text:
+                mode === "index"
+                  ? `[preview] sample image loaded (index ${sample.index_used})`
+                  : `[preview] sample image loaded (random index ${sample.index_used})`,
+            });
+          }
+
+          if (b.type === "image.show") {
+            if (!sampleRef.current) newLogs.push({ kind: "warn", text: "Get a sample image first, then 'show image'." });
+            else {
+              const title = (b.getFieldValue("TITLE") as string) || "Original";
+              newLogs.push({
+                kind: "image",
+                src: sampleRef.current.image_data_url,
+                caption: `${title} — label: ${sampleRef.current.label}`,
+              });
+            }
+          }
+
+          b = b.getNextBlock();
+        }
+      }
+
+      // pass 2: find the first chain that contains any m2.* block, build ops and run /preprocess/apply
+      let ranApply = false;
+      for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
+        let chainHasM2 = false;
+        for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
+          if (b.type.startsWith("m2.")) { chainHasM2 = true; break; }
+        }
+        if (!chainHasM2) continue;
+
+        if (!datasetKeyRef.current || !sampleRef.current) {
+          newLogs.push({ kind: "warn", text: "Add 'use dataset' and 'get sample image' before preprocessing." });
+          break;
+        }
+
+        const ops = blocksToOps(top);
+        const opsSummary = summarizeOps(ops);
+        if (opsSummary.length) {
+          newLogs.push({ kind: "card", title: "Pipeline", lines: opsSummary });
+        }
+
+        // check for analysis blocks in this chain to decide what to show
+        let wantsBeforeAfter = false;
+        let wantsShape = false;
+        for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
+          if (b.type === "m2.before_after") wantsBeforeAfter = true;
+          if (b.type === "m2.shape") wantsShape = true;
+        }
+
+        // call /preprocess/apply
+        const applyBody = {
+          dataset_key: datasetKeyRef.current,
+          path: sampleRef.current.path,
+          ops,
+        };
+        const applyResp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(applyBody),
+        });
+
+        if (wantsBeforeAfter) {
+          newLogs.push({
+            kind: "images",
+            items: [
+              { src: applyResp.before_data_url, caption: "Before (original)" },
+              { src: applyResp.after_data_url, caption: "After (processed)" },
+            ],
+          });
+        } else {
+          // If no before/after was requested, at least show the processed image
+          newLogs.push({
+            kind: "image",
+            src: applyResp.after_data_url,
+            caption: "Processed",
+          });
+        }
+
+        if (wantsShape) {
+          const [h, w, c] = applyResp.after_shape as [number, number, number];
+          newLogs.push({
+            kind: "card",
+            title: "Working Image Shape",
+            lines: [`Height: ${h}`, `Width: ${w}`, `Channels: ${c}`],
+          });
+        }
+
+        ranApply = true;
+        break; // run only the first m2 chain
+      }
+
+      // pass 3: loop + export (if present anywhere)
+      for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
+        let b: BlocklyBlock | null = top;
+        while (b) {
+          if (b.type === "m2.loop_dataset") {
+            if (!datasetKeyRef.current) {
+              newLogs.push({ kind: "warn", text: "Add 'use dataset' before the loop block." });
+              break;
+            }
+            // subset selection
+            const subsetMode = b.getFieldValue("SUBSET"); // all | firstN | randomN
+            const N = Number(b.getFieldValue("N") || 0);
+            const shuffle = b.getFieldValue("SHUFFLE") === "TRUE";
+            const K = Number(b.getFieldValue("K") || 10);
+
+            // inner ops
+            const inner = b.getInputTargetBlock("DO");
+            const innerOps = blocksToOps(inner);
+            const innerSummary = summarizeOps(innerOps);
+
+            newLogs.push({
+              kind: "card",
+              title: "Loop",
+              lines: [
+                `Subset: ${subsetMode}${subsetMode !== "all" ? ` (N=${N})` : ""}`,
+                `Shuffle: ${shuffle}`,
+                `Progress every: ${K} images`,
+                "Pipeline:",
+                ...innerSummary.map((s) => `• ${s}`),
+              ],
+            });
+
+            // find the following export block (we expect it after the loop)
+            let cursor: BlocklyBlock | null = b.getNextBlock();
+            let exportBlock: BlocklyBlock | null = null;
+            while (cursor) {
+              if (cursor.type === "m2.export_dataset") { exportBlock = cursor; break; }
+              cursor = cursor.getNextBlock();
+            }
+            if (!exportBlock) {
+              newLogs.push({ kind: "warn", text: "Add 'export processed dataset' after the loop to save results." });
+              break;
+            }
+
+            const newName = exportBlock.getFieldValue("NAME") || "processed";
+            const overwrite = exportBlock.getFieldValue("OVERWRITE") === "TRUE";
+
+            // Call /preprocess/batch_export
+            const body = {
+              dataset_key: datasetKeyRef.current,
+              subset: {
+                mode: subsetMode,
+                n: subsetMode === "all" ? null : N,
+                shuffle,
+              },
+              ops: innerOps,
+              new_dataset_name: newName,
+              overwrite,
+            };
+
+            const resp = await fetchJSON<BatchExportResp>(`${API_BASE}/preprocess/batch_export`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+
+            newLogs.push({
+              kind: "card",
+              title: "Export Complete",
+              lines: [
+                `New dataset: ${resp.new_dataset_key}`,
+                `Images processed: ${resp.processed}`,
+                `Classes: ${resp.classes.join(", ")}`,
+              ],
+            });
+          }
+          b = b.getNextBlock();
+        }
+      }
+
+      if (!ranApply && newLogs.length === 0) {
+        newLogs.push({
+          kind: "warn",
+          text: "Build a pipeline: use dataset → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
+        });
+      }
+
+      setLogs(newLogs);
+      setBaymaxLine("Nice! I can really see the difference after preprocessing.");
+    } catch (e: any) {
+      setLogs((prev) => [...prev, { kind: "error", text: `Run failed: ${e?.message || String(e)}` }]);
+      setBaymaxLine("Oops—my lenses fogged up. Can you check your blocks?");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   const appBg = dark ? "bg-neutral-950" : "bg-white";
   const barBg = dark ? "bg-neutral-900 border-neutral-800" : "bg-white border-gray-200";
   const barText = dark ? "text-neutral-100" : "text-gray-900";
@@ -252,7 +450,7 @@ export default function Module2Page() {
       className={`h-screen w-screen ${appBg}`}
       style={{
         display: "grid",
-        gridTemplateColumns: `minmax(0, 1fr) ${sizes.rightWidth}px`,
+        gridTemplateColumns: `minmax(0, 1fr) 380px`,
         gridTemplateRows: "48px 1fr",
       }}
     >
@@ -271,20 +469,7 @@ export default function Module2Page() {
           </button>
 
           <button
-            onClick={async () => {
-              if (!workspaceRef.current || running) return;
-              setRunning(true);
-              setLogs((prev) => [...prev, { kind: "info", text: "Running..." }]);
-              try {
-                const result = await runWorkspaceM2(workspaceRef.current);
-                setLogs(result.logs);
-                setBaymaxLine(result.baymax);
-              } catch (e: any) {
-                setLogs((prev) => [...prev, { kind: "error", text: `Run failed: ${e?.message || String(e)}` }]);
-              } finally {
-                setRunning(false);
-              }
-            }}
+            onClick={() => { if (!running) run(); }}
             className={`px-4 py-1.5 rounded-md ${running ? "opacity-60 cursor-not-allowed" : ""} bg-black text-white`}
             disabled={running}
           >
@@ -293,10 +478,10 @@ export default function Module2Page() {
         </div>
       </div>
 
-      {/* Middle: Blockly workspace */}
+      {/* Workspace */}
       <div ref={blocklyDivRef} className={`relative min-h-0 ${dark ? "bg-neutral-950" : "bg-white"}`} />
 
-      {/* Right: Output + Baymax */}
+      {/* Output + Baymax */}
       <div className={`border-l p-3 flex flex-col gap-4 min-h-0 ${rightBg}`}>
         <div className="h-[40vh]">
           <OutputPanel logs={logs} onClear={() => setLogs([])} dark={dark} />
