@@ -221,6 +221,26 @@ function summarizeOps(ops: any[]): string[] {
   });
 }
 
+function labelOp(op: any): string {
+  switch (op.type) {
+    case "reset": return "Reset";
+    case "resize":
+      if (op.mode === "size") return `Resize ${op.w}×${op.h}`;
+      if (op.mode === "fit") return `Resize (fit ≤${op.maxside})`;
+      return `Scale ${op.pct}%`;
+    case "crop_center": return `Center crop ${op.w}×${op.h}`;
+    case "pad":
+      return `Pad ${op.w}×${op.h}${op.mode === "constant" ? ` (rgb ${op.r},${op.g},${op.b})` : ` (${op.mode})`}`;
+    case "brightness_contrast": return `Brightness ${op.b}, Contrast ${op.c}`;
+    case "blur_sharpen": return `Blur r=${op.blur}, Sharpen=${op.sharp}`;
+    case "edges": return `Edges ${op.method} thr=${op.threshold}${op.overlay ? " (overlay)" : ""}`;
+    case "to_grayscale": return "Grayscale";
+    case "normalize": return `Normalize ${op.mode}`;
+    default: return op.type;
+  }
+}
+
+
 export default function Module2Page() {
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
@@ -235,6 +255,10 @@ export default function Module2Page() {
   // Session memory for dataset + sample image path
   const datasetKeyRef = useRef<string | null>(null);
   const sampleRef = useRef<SampleResponse | null>(null);
+
+  // Live preview bookkeeping
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPreviewSigRef = useRef<string>(""); // JSON signature of {ds, sample spec, ops}
 
   const sizes = useMemo(() => ({ rightWidth: 380 }), []);
 
@@ -259,7 +283,42 @@ export default function Module2Page() {
     // Load datasets into the dropdown on mount
     refreshDatasets(ws).catch(() => {});
 
-    return () => ws.dispose();
+    // LIVE PREVIEW: on-change listener, debounced
+    const onChange = (evt: any) => {
+      // Safely detect UI-only events (viewport moves, toolbox selection, theme, etc.)
+      const E = (Blockly as any).Events;
+      const uiTypes = new Set([
+        E.UI,                 // generic UI
+        E.CLICK,              // workspace clicks
+        E.VIEWPORT_CHANGE,
+        E.TOOLBOX_ITEM_SELECT,
+        E.THEME_CHANGE,
+        E.BUBBLE_OPEN,
+        E.TRASHCAN_OPEN,
+        E.SELECTED,
+      ]);
+
+      if (evt && evt.type && uiTypes.has(evt.type)) {
+        return; // ignore UI-only events
+      }
+
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+      previewTimer.current = setTimeout(() => {
+        livePreview().catch((e) => {
+          setLogs((prev) => [
+            ...prev,
+            { kind: "error", text: `Live preview failed: ${e?.message || String(e)}` },
+          ]);
+        });
+      }, 400); // debounce
+    };
+
+    ws.addChangeListener(onChange);
+
+    return () => {
+      ws.removeChangeListener(onChange);
+      ws.dispose();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocklyDivRef.current]);
 
@@ -268,6 +327,120 @@ export default function Module2Page() {
     workspaceRef.current.setTheme(dark ? DarkTheme : LightTheme);
   }, [dark]);
 
+  async function livePreview(): Promise<void> {
+    const ws = workspaceRef.current;
+    if (!ws) return;
+    
+
+    // Find dataset/sample and the first chain that contains any m2.* block
+    let dsKey: string | null = null;
+    let sampleMode: "random" | "index" | null = null;
+    let sampleIndex = 0;
+    let previewChain: BlocklyBlock | null = null;
+
+    const tops = ws.getTopBlocks(true) as BlocklyBlock[];
+    for (const top of tops) {
+      for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
+        if (b.type === "dataset.select" && !dsKey) dsKey = b.getFieldValue("DATASET");
+        if (b.type === "dataset.sample_image" && sampleMode === null) {
+          const mode = b.getFieldValue("MODE") as "random" | "index";
+          sampleMode = mode;
+          const idxRaw = b.getFieldValue("INDEX");
+          sampleIndex = typeof idxRaw === "number" ? idxRaw : parseInt(String(idxRaw || 0), 10) || 0;
+        }
+        if (!previewChain && b.type.startsWith("m2.")) previewChain = top;
+      }
+    }
+
+    if (!previewChain) return;                  // nothing to preview
+    if (!dsKey || !sampleMode) {                // missing setup
+      setLogs((prev) => [...prev, { kind: "warn", text: "Add 'use dataset' and 'get sample image' to see live preview." }]);
+      return;
+    }
+
+    // Build full ops and a cumulative plan
+    const fullOps = blocksToOps(previewChain);
+
+    // Signature to avoid re-running if nothing material changed
+    const sig = JSON.stringify({ dsKey, sample: { mode: sampleMode, index: sampleIndex }, ops: fullOps });
+    if (sig === lastPreviewSigRef.current) return;
+    lastPreviewSigRef.current = sig;
+
+    // Ensure we have a sample matching the spec
+    if (
+      !sampleRef.current ||
+      sampleRef.current.dataset_key !== dsKey ||
+      (sampleMode === "index" && sampleRef.current.index_used !== sampleIndex)
+    ) {
+      const url = `${API_BASE}/datasets/${encodeURIComponent(dsKey)}/sample?mode=${sampleMode}${
+        sampleMode === "index" ? `&index=${sampleIndex}` : ""
+      }`;
+      const sample = await fetchJSON<SampleResponse>(url);
+      datasetKeyRef.current = dsKey;
+      sampleRef.current = sample;
+    } else {
+      datasetKeyRef.current = dsKey;
+    }
+
+    // Determine if user asked for shape card (we’ll show final shape)
+    let wantsShape = false;
+    for (let b: BlocklyBlock | null = previewChain; b; b = b.getNextBlock()) {
+      if (b.type === "m2.shape") wantsShape = true;
+    }
+
+    // STEPWISE PREVIEW:
+    // Start with Original, then apply cumulative ops, capturing each step’s output.
+    const gallery: { src: string; caption: string }[] = [];
+    gallery.push({ src: sampleRef.current.image_data_url, caption: "Original" });
+
+    const cumulative: any[] = [];
+    let lastAfter: ApplyResp | null = null;
+
+    for (const op of fullOps) {
+      cumulative.push(op);
+
+      // Apply up to this op
+      const body = {
+        dataset_key: dsKey,
+        path: sampleRef.current.path,
+        ops: cumulative,
+      };
+      const stepResp = await fetchJSON<ApplyResp>(`${API_BASE}/preprocess/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // Add this step’s image
+      gallery.push({
+        src: stepResp.after_data_url,
+        caption: labelOp(op),
+      });
+
+      lastAfter = stepResp;
+    }
+
+    // Compose OutputPanel logs: compact pipeline summary + gallery + optional shape
+    const newLogs: LogItem[] = [];
+    const summary = summarizeOps(fullOps);
+    if (summary.length) newLogs.push({ kind: "card", title: "Pipeline (live)", lines: summary });
+
+    // Show the whole evolution vertically (Original + each step)
+    for (const it of gallery) {
+      newLogs.push({ kind: "image", src: it.src, caption: it.caption });
+    }
+
+    if (wantsShape && lastAfter) {
+      const [h, w, c] = lastAfter.after_shape as [number, number, number];
+      newLogs.push({ kind: "card", title: "Final Shape", lines: [`Height: ${h}`, `Width: ${w}`, `Channels: ${c}`] });
+    }
+
+    setLogs(newLogs);
+    setBaymaxLine("Each block’s effect is shown step-by-step!");
+  }
+
+
+  /** Manual run: keeps loop/export behavior (dataset-wide ops) */
   async function run(): Promise<void> {
     const ws = workspaceRef.current;
     if (!ws) return;
@@ -276,7 +449,7 @@ export default function Module2Page() {
     const newLogs: LogItem[] = [];
 
     try {
-      // pass 1: walk blocks to handle dataset.* and sampling & image.show
+      // pass 1: walk blocks to handle dataset.* / info / counts / sample & image.show
       const tops = ws.getTopBlocks(true) as BlocklyBlock[];
 
       datasetKeyRef.current = null;
@@ -382,86 +555,7 @@ export default function Module2Page() {
         }
       }
 
-      // pass 2: find the first chain with any m2.* block, build ops and run /preprocess/apply
-      let ranApply = false;
-      for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
-        let chainHasM2 = false;
-        for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-          if (b.type.startsWith("m2.")) {
-            chainHasM2 = true;
-            break;
-          }
-        }
-        if (!chainHasM2) continue;
-
-        if (!datasetKeyRef.current || !sampleRef.current) {
-          newLogs.push({
-            kind: "warn",
-            text: "Add 'use dataset' and 'get sample image' before preprocessing.",
-          });
-          break;
-        }
-
-        const ops = blocksToOps(top);
-        const opsSummary = summarizeOps(ops);
-        if (opsSummary.length) {
-          newLogs.push({ kind: "card", title: "Pipeline", lines: opsSummary });
-        }
-
-        // check for analysis blocks in this chain to decide what to show
-        let wantsBeforeAfter = false;
-        let wantsShape = false;
-        for (let b: BlocklyBlock | null = top; b; b = b.getNextBlock()) {
-          if (b.type === "m2.before_after") wantsBeforeAfter = true;
-          if (b.type === "m2.shape") wantsShape = true;
-        }
-
-        // call /preprocess/apply
-        const applyBody = {
-          dataset_key: datasetKeyRef.current,
-          path: sampleRef.current.path,
-          ops,
-        };
-        const applyResp = await fetchJSON<ApplyResp>(
-          `${API_BASE}/preprocess/apply`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(applyBody),
-          }
-        );
-
-        if (wantsBeforeAfter) {
-          newLogs.push({
-            kind: "images",
-            items: [
-              { src: applyResp.before_data_url, caption: "Before (original)" },
-              { src: applyResp.after_data_url, caption: "After (processed)" },
-            ],
-          });
-        } else {
-          // If no before/after was requested, at least show the processed image
-          newLogs.push({
-            kind: "image",
-            src: applyResp.after_data_url,
-            caption: "Processed",
-          });
-        }
-
-        if (wantsShape) {
-          const [h, w, c] = applyResp.after_shape as [number, number, number];
-          newLogs.push({
-            kind: "card",
-            title: "Working Image Shape",
-            lines: [`Height: ${h}`, `Width: ${w}`, `Channels: ${c}`],
-          });
-        }
-
-        ranApply = true;
-        break; // run only the first m2 chain
-      }
-
-      // pass 3: loop + export (if present anywhere)
+      // pass 2: dataset-wide operations (loop + export)
       for (const top of ws.getTopBlocks(true) as BlocklyBlock[]) {
         let b: BlocklyBlock | null = top;
         while (b) {
@@ -488,9 +582,7 @@ export default function Module2Page() {
               kind: "card",
               title: "Loop",
               lines: [
-                `Subset: ${subsetMode}${
-                  subsetMode !== "all" ? ` (N=${N})` : ""
-                }`,
+                `Subset: ${subsetMode}${subsetMode !== "all" ? ` (N=${N})` : ""}`,
                 `Shuffle: ${shuffle}`,
                 `Progress every: ${K} images`,
                 "Pipeline:",
@@ -516,10 +608,8 @@ export default function Module2Page() {
               break;
             }
 
-            const newName =
-              exportBlock.getFieldValue("NAME") || "processed";
-            const overwrite =
-              exportBlock.getFieldValue("OVERWRITE") === "TRUE";
+            const newName = exportBlock.getFieldValue("NAME") || "processed";
+            const overwrite = exportBlock.getFieldValue("OVERWRITE") === "TRUE";
 
             // Call /preprocess/batch_export
             const body = {
@@ -560,16 +650,16 @@ export default function Module2Page() {
         }
       }
 
-      if (!ranApply && newLogs.length === 0) {
+      if (newLogs.length === 0) {
         newLogs.push({
           kind: "warn",
           text:
-            "Build a pipeline: use dataset → dataset info/class counts (optional) → get sample image → reset → resize/pad/etc. → before/after (optional) → run.",
+            "Use Run for dataset-wide actions (loop + export). Live preview handles the sample image automatically.",
         });
       }
 
-      setLogs(newLogs);
-      setBaymaxLine("Nice! I can really see the difference after preprocessing.");
+      setLogs((prev) => [...prev, ...newLogs]);
+      setBaymaxLine("Dataset actions completed.");
     } catch (e: any) {
       setLogs((prev) => [
         ...prev,

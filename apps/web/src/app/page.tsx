@@ -18,7 +18,7 @@ export default function HomePage() {
     <div className={`h-screen w-screen ${appBg} grid grid-rows-[48px_1fr]`}>
       {/* Top bar */}
       <div className={`flex items-center justify-between px-3 border-b ${barBg}`}>
-        <div className={`font-semibold ${barText}`}>VisionBlocks — Home</div>
+        <div className={`font-semibold ${barText}`}>VisionBlocks</div>
         <div className="flex gap-2 items-center">
           <button
             onClick={() => setDark(!dark)}
@@ -49,19 +49,19 @@ export default function HomePage() {
       <main className="p-6">
         <h1 className={`text-2xl font-bold ${barText}`}>Welcome to VisionBlocks</h1>
         <p className={`mt-2 ${subText}`}>
-          Pick any module to begin. You can always come back here from the menu.
+          Pick any module to begin.
         </p>
 
         <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <Link href="/module1" className={`rounded-xl border ${cardBg} p-4 hover:opacity-95`}>
-            <div className={`${barText} text-lg font-semibold`}>Module 1 — Learn to See</div>
+            <div className={`${barText} text-lg font-semibold`}>Module 1: Learn to See</div>
             <p className={`${subText} mt-1 text-sm`}>
               Meet Baymax and explore images, labels, and channels.
             </p>
           </Link>
 
           <Link href="/module2" className={`rounded-xl border ${cardBg} p-4 hover:opacity-95`}>
-            <div className={`${barText} text-lg font-semibold`}>Module 2 — Image Preprocessing</div>
+            <div className={`${barText} text-lg font-semibold`}>Module 2: Image Preprocessing</div>
             <p className={`${subText} mt-1 text-sm`}>
               Resize, normalize, and prepare images for learning.
             </p>
