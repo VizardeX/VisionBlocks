@@ -21,7 +21,7 @@ export const toolboxJsonModule4 = {
       colour: "#22c55e",
       contents: [
         { kind: "block", type: "dataset.sample_image" },
-        { kind: "block", type: "image.show" },
+        { kind: "block", type: "image.channels_split" }, 
       ],
     },
 

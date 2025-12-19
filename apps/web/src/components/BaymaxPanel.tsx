@@ -69,7 +69,7 @@ export default function BaymaxPanel({
   return (
     <div className="flex flex-col gap-3">
       {/* Heading */}
-      <h2 className={`text-sm font-semibold tracking-wide ${titleCls}`}>Baymax</h2>
+      <h2 className={`text-sm font-semibold tracking-wide ${titleCls}`}>Robo</h2>
 
       {/* Avatar + speech inline in panel */}
       <div className="flex items-center gap-3">
