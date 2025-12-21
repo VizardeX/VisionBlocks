@@ -58,10 +58,10 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "What is Grayscale?",
       text: `
-    A grayscale image removes all colors and keeps only brightness (how light or dark each pixel is).
+    This is the first step in the pipeline. A grayscale image removes all colors and keeps only brightness (how light or dark each pixel is).
     Why would we do that?
 
-    • Many tasks rely on shape, outline, or texture—not color.
+    • Many tasks rely on shape, outline, or texture, not color.
     • Removing color makes the model focus on structure instead of distractions.
     • It also reduces the input size, making everything faster.
 
@@ -85,7 +85,7 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "Why Adjust Brightness, Contrast, and Sharpness?",
       text: `
-    Real photos often have problems: dark areas, bright lamps, blurry edges, or random noise.
+    This step comes after the grayscaling is done. Real photos often have problems: dark areas, bright lamps, blurry edges, or random noise.
     These small fixes help the model see the important parts more clearly.
 
     • Brightness: makes the whole image lighter or darker.
@@ -119,7 +119,7 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "Why Resize and Pad Images?",
       text: `
-    Neural networks expect every image to be the same size, but real datasets come in all shapes:
+    This is the step after some changes on brightness or a bit of blurring. Neural networks expect every image to be the same size, but real datasets come in all shapes:
     wide, tall, small, big, or anything in between.
 
     • Resize: shrinks or expands the image so its biggest side fits the target size.
@@ -168,7 +168,7 @@ export const module2Stages: StageConfig[] = [
     help: {
       title: "Why Normalize Pixel Values?",
       text: `
-    Raw pixel values go from 0 to 255.  
+    This is the last step in the pipeline.Raw pixel values go from 0 to 255.  
     Feeding these big numbers into a model can make learning uneven or unstable.
 
     Normalization rescales every pixel into a small, predictable range like 0–1. This helps because:

@@ -7,11 +7,15 @@ type SubmissionModalProps = {
   title?: string;
   lines?: string[];
   success?: boolean;
+  onNext?: () => void;
+  nextLabel?: string;
 };
 
 export default function SubmissionModal({
   open,
   onClose,
+  onNext,
+  nextLabel,
   dark = false,
   title,
   lines,
@@ -204,17 +208,24 @@ export default function SubmissionModal({
 
             {/* Footer */}
             <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className={
-                  isSuccess
-                    ? primaryBtnBase + " " + primaryBtnCls
-                    : primaryBtnBase + " " + primaryBtnCls
-                }
-              >
-                {isSuccess ? "Nice, got it" : "I'll adjust it"}
-              </button>
+              {/* On success: replace "Nice, got it" with Next Stage (or Finish Module) */}
+              {isSuccess ? (
+                <button
+                  type="button"
+                  onClick={onNext || onClose}
+                  className={primaryBtnBase + " " + primaryBtnCls}
+                >
+                  {nextLabel || "Next Stage"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className={primaryBtnBase + " " + primaryBtnCls}
+                >
+                  I'll adjust it
+                </button>
+              )}
             </div>
           </div>
         </div>

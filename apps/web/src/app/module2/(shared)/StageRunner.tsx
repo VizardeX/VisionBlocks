@@ -323,6 +323,107 @@ export default function StageRunner({ stageId }: { stageId: string }) {
 
   const blocklyDivRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef<WorkspaceSvg | null>(null);
+  const stageHelpShownRef = useRef<string | null>(null);
+  const prevInfoOpenRef = useRef(false);
+
+    // For Stage 1 spotlight focus on the TargetPanel
+  const targetPanelRef = useRef<HTMLDivElement | null>(null);
+
+  // Track whether the info modal was opened automatically on stage enter
+  const autoStageHelpOpenRef = useRef(false);
+
+  // Spotlight state
+  const [stage1SpotlightActive, setStage1SpotlightActive] = useState(false);
+  const [focusRect, setFocusRect] = useState<DOMRect | null>(null);
+  const [spotlightCardPos, setSpotlightCardPos] = useState<{ top: number; left: number } | null>(null);
+
+  function getDefaultRect(): DOMRect {
+    const vw = window.innerWidth || 1200;
+    const vh = window.innerHeight || 800;
+    const width = Math.min(520, vw - 80);
+    const height = 240;
+    const left = (vw - width) / 2;
+    const top = (vh - height) / 2;
+    return new DOMRect(left, top, width, height);
+  }
+
+  function updateFocusRectForTargetPanel() {
+    const el = targetPanelRef.current;
+    if (!el) {
+      setFocusRect(getDefaultRect());
+      try {
+        // eslint-disable-next-line no-console
+        console.debug("StageRunner: targetPanel not mounted, using default rect");
+      } catch {}
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    try {
+      // eslint-disable-next-line no-console
+      console.debug("StageRunner: measured target panel rect", rect);
+    } catch {}
+    setFocusRect(rect);
+  }
+
+  function measureTargetPanelWithRetry(tries = 12) {
+    const el = targetPanelRef.current;
+
+    // If the panel isn't mounted yet, retry
+    if (!el) {
+      if (tries > 0) setTimeout(() => measureTargetPanelWithRetry(tries - 1), 50);
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    try {
+      // eslint-disable-next-line no-console
+      console.debug("StageRunner: measureTargetPanelWithRetry", { tries, rect });
+    } catch {}
+
+    // If rect is still "too small" (often happens before images load), retry
+    if ((rect.width < 120 || rect.height < 80) && tries > 0) {
+      setTimeout(() => measureTargetPanelWithRetry(tries - 1), 50);
+      return;
+    }
+
+    // Use measured rect (fallback even if small after retries)
+    setFocusRect(rect);
+  }
+
+  function computeCardPos(rect: DOMRect) {
+    const margin = 16;
+    const cardWidth = 340;
+    const cardHeight = 200;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let top = rect.top;
+    let left = rect.right + margin;
+
+    // 1) Right side
+    if (rect.right + margin + cardWidth < vw) {
+      top = Math.min(rect.top, vh - cardHeight - margin);
+      left = rect.right + margin;
+    } else if (rect.left - margin - cardWidth > 0) {
+      // 2) Left side
+      top = Math.min(rect.top, vh - cardHeight - margin);
+      left = rect.left - cardWidth - margin;
+    } else if (rect.bottom + margin + cardHeight < vh) {
+      // 3) Below
+      top = rect.bottom + margin;
+      left = Math.min(rect.left, vw - cardWidth - margin);
+    } else {
+      // 4) Above
+      top = rect.top - cardHeight - margin;
+      left = Math.min(rect.left, vw - cardWidth - margin);
+    }
+
+    if (top < margin) top = margin;
+    if (left < margin) left = margin;
+
+    return { top, left };
+  }
+
 
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState<LogItem[]>([]);
@@ -372,7 +473,50 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   const datasetLogsRef = useRef<LogItem[]>([]);
   const pipelineLogsRef = useRef<LogItem[]>([]);
 
-  /* ---------- Global CSS for glow + Baymax animation ---------- */
+  /* ---------- Spotlight → then InfoModal sequencing for auto-help ---------- */
+  // Sequencing is handled: when the spotlight is dismissed we open the
+  // InfoModal (for the auto-help case). This is implemented below and
+  // the CSS injection effect remains further down in the file.
+
+  useEffect(() => {
+    if (!stage1SpotlightActive) {
+      setFocusRect(null);
+      setSpotlightCardPos(null);
+      return;
+    }
+
+    // initial measurement
+    updateFocusRectForTargetPanel();
+
+    const onResize = () => updateFocusRectForTargetPanel();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage1SpotlightActive]);
+
+  useEffect(() => {
+    if (!stage1SpotlightActive || !focusRect) {
+      setSpotlightCardPos(null);
+      return;
+    }
+    setSpotlightCardPos(computeCardPos(focusRect));
+  }, [stage1SpotlightActive, focusRect]);
+
+  // When the spotlight is dismissed, open the auto-help InfoModal (if queued)
+  useEffect(() => {
+    if (stage1SpotlightActive) return;
+    if (!autoStageHelpOpenRef.current) return;
+    if (String(stage?.id) !== "1") return;
+
+    autoStageHelpOpenRef.current = false;
+    if (stage?.help) {
+      setInfoTitle(stage.help.title);
+      setInfoText(stage.help.text);
+      setInfoOpen(true);
+    }
+  }, [stage1SpotlightActive, stage]);
+
+
   useEffect(() => {
     if (typeof document === "undefined") return;
     const existing = document.getElementById("vb-m2-style");
@@ -496,6 +640,48 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     setLogs([]);
     dsInfoRef.current = null;
     sampleRef.current = null;
+    setStage1SpotlightActive(false);
+    setFocusRect(null);
+    setSpotlightCardPos(null);
+    autoStageHelpOpenRef.current = false;
+
+    // Auto-help sequence: show spotlight first, then open InfoModal after
+    // the user dismisses the spotlight. For Stage 1 we always show the
+    // spotlight when entering the page; for other stages keep the
+    // one-time-per-stage behavior.
+    if (String(stage?.id) === "1") {
+      autoStageHelpOpenRef.current = !!stage?.help;
+      if (stage?.help) {
+        setInfoTitle(stage.help.title);
+        setInfoText(stage.help.text);
+      }
+      // ensure any open InfoModal is closed, start with spotlight active;
+      // modal will open after spotlight dismissed
+      setInfoOpen(false);
+      setStage1SpotlightActive(true);
+      // measure after a short delay so layout settles
+      setTimeout(() => {
+        try {
+          requestAnimationFrame(() => measureTargetPanelWithRetry());
+        } catch {}
+      }, 50);
+    } else if (stage?.help && stageHelpShownRef.current !== String(stage.id)) {
+      stageHelpShownRef.current = String(stage.id);
+      autoStageHelpOpenRef.current = true;
+      // stash the modal content so we can open it after the spotlight closes
+      setInfoTitle(stage.help.title);
+      setInfoText(stage.help.text);
+      // ensure any open InfoModal is closed, start with spotlight active;
+      // modal will open after spotlight dismissed
+      setInfoOpen(false);
+      setStage1SpotlightActive(true);
+      // measure after a short delay so layout settles
+      setTimeout(() => {
+        try {
+          requestAnimationFrame(() => measureTargetPanelWithRetry());
+        } catch {}
+      }, 50);
+    }
 
     const ws = Blockly.inject(blocklyDivRef.current, {
       toolbox: toolboxJsonModule2,
@@ -1226,6 +1412,7 @@ export default function StageRunner({ stageId }: { stageId: string }) {
     }
 
     // Order matches our simple check, nothing specific to say
+    console.debug("StageRunner: pipelineNextStepHint -> no sequence hint");
     return null;
   }
 
@@ -1236,6 +1423,9 @@ function updateBaymaxFromChecklist(
   items: StageChecklistItem[],
   _prevItems?: StageChecklistItem[]
 ) {
+  console.debug("StageRunner: updateBaymaxFromChecklist", String(s.id), {
+    items: items.map((it) => ({ key: it.key, state: it.state })),
+  });
   const done = items.filter((i) => i.state === "ok").length;
   const missing = items.filter((i) => i.state === "missing");
   const wrong = items.filter((i) => i.state === "wrong_place");
@@ -1312,10 +1502,11 @@ function updateBaymaxFromChecklist(
 
       // Now do the "after this block, that block should be here" logic.
       const seqLine = pipelineNextStepHint(s, items);
-      if (seqLine) {
-        setBaymaxState(seqLine, "warning", true);
-        return;
-      }
+        if (seqLine) {
+          console.debug("StageRunner: pipeline seq hint ->", seqLine);
+          setBaymaxState(seqLine, "warning", true);
+          return;
+        }
       // If we somehow can't compute a sequence hint, fall through
       // to the generic wrong-place messages below.
     }
@@ -1823,6 +2014,7 @@ function updateBaymaxFromChecklist(
   /* ---------- UI ---------- */
 
   if (!stage) return <div className="p-6 text-red-600">Stage not found.</div>;
+  const rect = focusRect ?? getDefaultRect();
 
   return (
     <div className="h-screen w-screen bg-[#E3E7F5] overflow-hidden">
@@ -1959,13 +2151,14 @@ function updateBaymaxFromChecklist(
 
               {/* Target vs current (pipeline stages only) */}
               {stage.type === "pipeline" && (
-                <TargetPanel
-                  targetSrc={targetSrc}
-                  currentSrc={currentSrc}
-                  dark={false}
-                />
+                <div ref={targetPanelRef}>
+                  <TargetPanel
+                    targetSrc={targetSrc}
+                    currentSrc={currentSrc}
+                    dark={false}
+                  />
+                </div>
               )}
-
               {/* Output panel */}
               <div className="flex-1 min-h-0">
                 <OutputPanel logs={logs} onClear={() => setLogs([])} dark={false} />
@@ -1979,6 +2172,85 @@ function updateBaymaxFromChecklist(
           </div>
         </div>
       </div>
+
+      {/* Stage 1: spotlight Target vs Current panel after first auto help close */}
+      {stage1SpotlightActive && (
+        <div className="fixed inset-0 z-[9999] pointer-events-auto">
+          {/* Four dim regions */}
+          <div
+            className="absolute left-0 right-0 bg-slate-900/55 backdrop-blur-[3px]"
+            style={{ top: 0, height: Math.max(0, rect.top) }}
+            onClick={() => setStage1SpotlightActive(false)}
+          />
+          <div
+            className="absolute left-0 right-0 bg-slate-900/55 backdrop-blur-[3px]"
+            style={{ top: rect.bottom, bottom: 0 }}
+            onClick={() => setStage1SpotlightActive(false)}
+          />
+          <div
+            className="absolute bg-slate-900/55 backdrop-blur-[3px]"
+            style={{
+              top: rect.top,
+              height: rect.height,
+              left: 0,
+              width: Math.max(0, rect.left),
+            }}
+            onClick={() => setStage1SpotlightActive(false)}
+          />
+          <div
+            className="absolute bg-slate-900/55 backdrop-blur-[3px]"
+            style={{
+              top: rect.top,
+              height: rect.height,
+              left: rect.right,
+              right: 0,
+            }}
+            onClick={() => setStage1SpotlightActive(false)}
+          />
+
+          {/* Highlight border */}
+          <div
+            className="absolute rounded-2xl pointer-events-none"
+            style={{
+              top: Math.max(0, rect.top - 6),
+              left: Math.max(0, rect.left - 6),
+              width: rect.width + 12,
+              height: rect.height + 12,
+              boxShadow:
+                "0 0 0 2px rgba(251,191,36,0.9), 0 0 30px rgba(251,191,36,0.85)",
+            }}
+          />
+
+          {/* Card */}
+          {spotlightCardPos && (
+            <div
+              className="absolute z-[1000]"
+              style={{ top: spotlightCardPos.top, left: spotlightCardPos.left }}
+            >
+              <div className="max-w-[340px] w-[340px] rounded-2xl bg-white shadow-2xl border border-slate-200 p-5">
+                <h2 className="text-lg font-semibold text-slate-900 mb-2">
+                  Target vs Current
+                </h2>
+                <p className="text-sm text-slate-600 mb-4">
+                  This panel helps you compare your pipeline output to the goal.
+                  <br /><br />
+                  <b>Target</b> is what the stage expects. <b>Current</b> is what your
+                  blocks produce. If they don’t match, tweak your blocks until they do.
+                </p>
+
+                <div className="flex items-center justify-end gap-3 mt-2">
+                  <button
+                    onClick={() => setStage1SpotlightActive(false)}
+                    className="px-4 py-1.5 rounded-full bg-sky-500 text-xs font-semibold text-white shadow-sm hover:bg-sky-400 hover:shadow-[0_0_12px_rgba(56,189,248,0.7)] transition"
+                  >
+                    Nice, got it
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Info modal */}
       <InfoModal
@@ -1997,6 +2269,11 @@ function updateBaymaxFromChecklist(
         title={submitTitle}
         lines={submitLines}
         success={submitSuccess}
+        nextLabel={nextStage ? "Next Stage" : "Finish Module"}
+        onNext={() => {
+          setSubmitOpen(false);
+          goNext();
+        }}
       />
     </div>
   );
