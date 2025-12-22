@@ -67,7 +67,7 @@ export const module2Stages: StageConfig[] = [
 
     Think of it like drawing with a pencil before painting, to get the structure right first.
 
-    Look for the glowing blocks! They are what you need to finish the stage.
+    > Look for the glowing blocks! They are what you need to finish the stage.
     `.trim(),
     },
     requiredBlocks: ["m2.to_grayscale"],
@@ -98,8 +98,9 @@ export const module2Stages: StageConfig[] = [
     The goal is not to dramatically change the image, but to make it clean and easy to understand,
     just like wiping dust off a camera lens before taking a picture. 
 
-    Be sure to order the blocks the same order of the stages, as the order of stages are the proper order of steps.
-    Look for the glowing blocks! They are what you need to finish the stage.
+    > Be sure to order the blocks the same order of the stages, as the order of stages are the proper order of steps.
+
+    > Look for the glowing blocks! They are what you need to finish the stage.
     `.trim(),
     },
     // We build on Stage 1, then add brightness/contrast + blur/sharpen
@@ -134,8 +135,9 @@ export const module2Stages: StageConfig[] = [
     Imagine placing many different photos into identical picture frames.  
     Resizing makes them fit inside; padding fills the leftover space so the frame stays neat. Use resizing to resize the images, then pad them so they can become squares!
   
-    Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
-    Look for the glowing blocks! They are what you need to finish the stage.
+    > Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
+
+    > Look for the glowing blocks! They are what you need to finish the stage.
     `.trim(),
     },
     // Build on Stage 2, then add resize + pad
@@ -187,8 +189,9 @@ export const module2Stages: StageConfig[] = [
 
     It’s like converting all exam scores to a 0–1 scale before averaging them, everything becomes fair and stable.
 
-    Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
-    Look for the glowing blocks! They are what you need to finish the stage.    `
+    > Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
+
+    > Look for the glowing blocks! They are what you need to finish the stage.    `
     .trim(),
     },
     // Build on Stage 3, then add normalization at the end
@@ -239,8 +242,9 @@ export const module2Stages: StageConfig[] = [
     Think of it like applying the same photo filter to an entire album automatically,
     then saving the whole improved collection for training later.
 
-    Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
-    Look for the glowing blocks! They are what you need to finish the stage.    `
+    > Be sure to order the blocks the same way as the stages, as the order of stages are the proper order of steps.
+
+    > Look for the glowing blocks! They are what you need to finish the stage.    `
     .trim(),
     },
     requiredBlocksWithinLoop: [

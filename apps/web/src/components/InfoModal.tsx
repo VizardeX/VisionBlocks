@@ -21,9 +21,43 @@ export default function InfoModal({
 
   // Turn "•" in the text into proper bullets for readability
   const raw = (text || "").trim();
-  const parts = raw.split("•").map((p) => p.trim()).filter(Boolean);
-  const intro = parts.length > 0 ? parts[0] : raw;
-  const bullets = parts.length > 1 ? parts.slice(1) : [];
+
+  // Split the content into paragraphs (double-newline separated). This
+  // preserves intentional spacing in the source text. We then detect the
+  // paragraph(s) that contain bullet markers ("•") and render them as a
+  // list, while keeping any paragraphs before/after the bullets as separate
+  // paragraphs so blank lines show up in the UI.
+  const paragraphs = raw
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let introParagraphs: string[] = [];
+  let bullets: string[] = [];
+  let trailingParagraphs: string[] = [];
+
+  const firstBulletIdx = paragraphs.findIndex((p) => p.includes("•"));
+  if (firstBulletIdx === -1) {
+    introParagraphs = paragraphs;
+  } else {
+    introParagraphs = paragraphs.slice(0, firstBulletIdx);
+
+    // Collect consecutive paragraphs that contain bullets (usually one).
+    let j = firstBulletIdx;
+    const bulletParagraphs: string[] = [];
+    while (j < paragraphs.length && paragraphs[j].includes("•")) {
+      bulletParagraphs.push(paragraphs[j]);
+      j++;
+    }
+
+    const combinedBulletText = bulletParagraphs.join("\n\n");
+    bullets = combinedBulletText
+      .split("•")
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    trailingParagraphs = paragraphs.slice(j);
+  }
 
   return (
     <>
@@ -116,17 +150,19 @@ export default function InfoModal({
               </button>
             </div>
 
-            {/* intro paragraph */}
-            {intro && (
-              <p
-                className={`
-                  mt-4 text-sm leading-relaxed
-                  ${isDark ? "text-slate-200" : "text-slate-700"}
-                `}
-              >
-                {intro}
-              </p>
-            )}
+            {/* intro paragraphs (preserve blank-line separation) */}
+            {introParagraphs.length > 0 &&
+              introParagraphs.map((p, i) => (
+                <p
+                  key={`intro-${i}`}
+                  className={`
+                    mt-4 text-sm leading-relaxed
+                    ${isDark ? "text-slate-200" : "text-slate-700"}
+                  `}
+                >
+                  {p}
+                </p>
+              ))}
 
             {/* bullet list if present */}
             {bullets.length > 0 && (
@@ -150,6 +186,20 @@ export default function InfoModal({
                 ))}
               </ul>
             )}
+
+            {/* trailing paragraphs after bullets (preserve spacing) */}
+            {trailingParagraphs.length > 0 &&
+              trailingParagraphs.map((p, i) => (
+                <p
+                  key={`trail-${i}`}
+                  className={`
+                    mt-4 text-sm leading-relaxed
+                    ${isDark ? "text-slate-200" : "text-slate-700"}
+                  `}
+                >
+                  {p}
+                </p>
+              ))}
           </div>
         </div>
       </div>
