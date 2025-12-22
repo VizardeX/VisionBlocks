@@ -608,12 +608,27 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       required.add("dataset.select");
     }
 
+    // Determine which required block types are already present in the
+    // main workspace (i.e. the user has dragged/attached them). If a
+    // block type is present, it should NOT glow in the flyout.
+    const presentTypes = new Set<string>();
+    try {
+      const mainBlocks = (workspaceRef.current?.getAllBlocks(false) || []) as any[];
+      for (const mb of mainBlocks) {
+        if (mb && mb.type) presentTypes.add(mb.type);
+      }
+    } catch {
+      // ignore errors and fall back to conservative behavior
+    }
+
     const topBlocks = flyWs.getTopBlocks(false) || [];
     topBlocks.forEach((b: any) => {
       const svgRoot = b.getSvgRoot?.();
       if (!svgRoot) return;
 
-      if (required.has(b.type)) {
+      // Glow only if this type is required AND not already present
+      // in the main workspace (i.e. not attached yet).
+      if (required.has(b.type) && !presentTypes.has(b.type)) {
         svgRoot.classList.add("vb-mission-glow-block");
       } else {
         svgRoot.classList.remove("vb-mission-glow-block");
