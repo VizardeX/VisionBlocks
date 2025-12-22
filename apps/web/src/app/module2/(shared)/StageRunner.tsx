@@ -506,8 +506,6 @@ export default function StageRunner({ stageId }: { stageId: string }) {
   useEffect(() => {
     if (stage1SpotlightActive) return;
     if (!autoStageHelpOpenRef.current) return;
-    if (String(stage?.id) !== "1") return;
-
     autoStageHelpOpenRef.current = false;
     if (stage?.help) {
       setInfoTitle(stage.help.title);
@@ -667,20 +665,11 @@ export default function StageRunner({ stageId }: { stageId: string }) {
       }, 50);
     } else if (stage?.help && stageHelpShownRef.current !== String(stage.id)) {
       stageHelpShownRef.current = String(stage.id);
-      autoStageHelpOpenRef.current = true;
-      // stash the modal content so we can open it after the spotlight closes
+      // For non-stage-1, open the InfoModal immediately (no spotlight).
+      autoStageHelpOpenRef.current = false;
       setInfoTitle(stage.help.title);
       setInfoText(stage.help.text);
-      // ensure any open InfoModal is closed, start with spotlight active;
-      // modal will open after spotlight dismissed
-      setInfoOpen(false);
-      setStage1SpotlightActive(true);
-      // measure after a short delay so layout settles
-      setTimeout(() => {
-        try {
-          requestAnimationFrame(() => measureTargetPanelWithRetry());
-        } catch {}
-      }, 50);
+      setInfoOpen(true);
     }
 
     const ws = Blockly.inject(blocklyDivRef.current, {
