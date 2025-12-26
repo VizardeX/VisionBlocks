@@ -58,7 +58,7 @@ export const module4Stages: StageConfig[] = [
     type: "split",
     intro: [
       "Create a train/test split so the model can learn from one part of the data and be checked on another.",
-      "You’ll choose a dataset, inspect its classes, then decide what percentage goes into training vs testing.",
+      "You’ll choose a dataset, then decide what percentage of the data goes into training vs testing.",
     ],
     help: {
       title: "Why do we split the data?",

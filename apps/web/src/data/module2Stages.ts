@@ -129,7 +129,7 @@ export const module2Stages: StageConfig[] = [
     wide, tall, small, big, or anything in between.
 
     • Resize: shrinks or expands the image so its biggest side fits the target size.
-      (We keep the original shape so things don’t look stretched or squished.)
+      (We keep the original shape so things don’t look stretched or squished by keeping the aspect ratio.)
     • Pad: adds blank space around the image so it becomes a perfect square like 150×150.
 
     Imagine placing many different photos into identical picture frames.  
@@ -221,7 +221,7 @@ export const module2Stages: StageConfig[] = [
     ],
   },
 
-  // STAGE 5 – Loop & Export (same logic as old Stage 7, just new id and order)
+  // STAGE 5 – Loop & Export 
   {
     id: 5,
     title: "Stage 5: Loop & Export",
@@ -270,7 +270,7 @@ export const module2Stages: StageConfig[] = [
 ]
   },
 
-  // BONUS – Edge Detection (unchanged)
+  // BONUS – Edge Detection
   {
     id: "bonus",
     title: "Bonus: Edge Detection",
@@ -288,8 +288,8 @@ export const module2Stages: StageConfig[] = [
     • Shape matters more than color (like signs, symbols, tools).
     • You want the model to pay attention to boundaries.
 
-    But for natural photos (animals, landscapes, people), edges can remove too much information.
-    So think of edge detection as a special tool, not a default step, in your image toolbox.
+    But for certain images that might have unstructured environments (like a forest) or other complex backgrounds, edges can remove too much information.
+    So think of edge detection as a special tool, not a default step.
     `.trim(),
     },
     requiredBlocks: ["m2.edges"],
